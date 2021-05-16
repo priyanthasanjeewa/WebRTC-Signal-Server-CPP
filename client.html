@@ -1,0 +1,83 @@
+<!DOCTYPE HTML>
+
+<html>
+   <head>
+      
+      <script type = "text/javascript">
+
+         var ws;
+
+         function WebSocketTest() {
+            
+            if ("WebSocket" in window) {
+               
+               // Let us open a web socket
+               ws = new WebSocket("ws://192.168.56.103:18099/");
+				
+               ws.onopen = function() {
+                  
+                  var person = { name: document.getElementById("username").value, ip: "127.0.0.3", port: 99330 };
+
+                  // Web Socket is connected, send data using send()
+                  var myInfo =JSON.stringify(person);
+                  ws.send(myInfo);
+
+                  log_line = "SENT: " + myInfo + "\n";
+                  document.getElementById("log").value += log_line;
+               };
+				
+               ws.onmessage = function (evt) {
+
+                  document.getElementById("log").value += "RECEIVED: " + evt.data + "\n";
+
+                  var event_obj = JSON.parse(evt.data);
+
+                  if (event_obj.hasOwnProperty("event_id")) {
+                      if (event_obj.event_id === "connect") {
+                          log_line = "User " + event_obj.name + "(" + event_obj.ws_user_id + ") connected\n";
+                      }
+                      else if (event_obj.event_id === "disconnect") {
+                          log_line = "User " + event_obj.name + "(" + event_obj.ws_user_id + ") disconnected\n";
+                      }
+                  }
+                  else
+                     log_line = "User specific message\n";
+
+                  document.getElementById("log").value += log_line;
+               };
+				
+               ws.onclose = function() { 
+                  
+                  // websocket is closed.
+                  // alert("Connection is closed..."); 
+                  document.getElementById("log").value += "Connection is closed.\n";
+               };
+            } else {
+              
+               alert("WebSocket NOT supported by your Browser!");
+            }
+         }
+         
+         function SendToTarget() {
+                  var msg = { ws_user_id: document.getElementById("target_user").value, msg: document.getElementById("target_message").value };
+
+                  // Web Socket is connected, send data using send()
+                  var tgt_msg=JSON.stringify(msg);
+                  ws.send(tgt_msg);
+
+                  log_line = "SENT: " + tgt_msg + "\n";
+                  document.getElementById("log").value += log_line;
+         }
+      </script>
+
+   </head>
+
+   <body>
+      <div id = "sse">
+         <input type="text" id="username" name="username">&nbsp&nbsp<a href = "javascript:WebSocketTest()">Login</a><br/><br/>
+         <input type="text" id="target_user" name="target_user">&nbsp&nbsp<input type="text" id="target_message" name="target_message">&nbsp&nbsp<a href = "javascript:SendToTarget()">Send</a><br/><br/>
+         <textarea id="log" rows="50" cols="130"></textarea>
+      </div>
+      
+   </body>
+</html>
