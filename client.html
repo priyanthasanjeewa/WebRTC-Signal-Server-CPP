@@ -12,11 +12,11 @@
             if ("WebSocket" in window) {
                
                // Let us open a web socket
-               ws = new WebSocket("ws://192.168.56.103:18099/");
+               ws = new WebSocket("ws://localhost:18099/");
 				
                ws.onopen = function() {
                   
-                  var person = { name: document.getElementById("username").value, ip: "127.0.0.3", port: 99330 };
+                  var person = { type: "login", name: document.getElementById("username").value, ip: "127.0.0.3", port: 99330 };
 
                   // Web Socket is connected, send data using send()
                   var myInfo =JSON.stringify(person);
@@ -32,13 +32,12 @@
 
                   var event_obj = JSON.parse(evt.data);
 
-                  if (event_obj.hasOwnProperty("event_id")) {
-                      if (event_obj.event_id === "connect") {
-                          log_line = "User " + event_obj.name + "(" + event_obj.ws_user_id + ") connected\n";
+                  if (event_obj.hasOwnProperty("type")) {
+                      if (event_obj.type === "login") {
+                          log_line = "User  logged in \n";
                       }
-                      else if (event_obj.event_id === "disconnect") {
-                          log_line = "User " + event_obj.name + "(" + event_obj.ws_user_id + ") disconnected\n";
-                      }
+                      else
+                          log_line = "User specific message\n";
                   }
                   else
                      log_line = "User specific message\n";
@@ -59,7 +58,7 @@
          }
          
          function SendToTarget() {
-                  var msg = { ws_user_id: document.getElementById("target_user").value, msg: document.getElementById("target_message").value };
+                  var msg = { type: "offer", name: document.getElementById("target_user").value, msg: document.getElementById("target_message").value };
 
                   // Web Socket is connected, send data using send()
                   var tgt_msg=JSON.stringify(msg);

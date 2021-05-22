@@ -5,11 +5,14 @@
 #include <websocketpp/config/asio_no_tls.hpp>
 #include <websocketpp/server.hpp>
 
+#include <json11/json11.hpp>
+
 #include <functional>
 #include <sstream>
 
 typedef websocketpp::server<websocketpp::config::asio> server;
 
+using json11::Json;
 
 class signalling_server {
 public:
@@ -35,104 +38,142 @@ public:
 
     void on_open(websocketpp::connection_hdl hdl) {
 
-        auto user_id = hdl.lock().get();
+        auto connection_id = hdl.lock().get();
 
-        std::cout << "USER CONNECTED: (" << user_id << ")" << std::endl;
+        std::cout << "USER CONNECTED: (" << connection_id << ")" << std::endl;
 
-        m_active_user_handle[user_id] = hdl.lock();
+        Json connect = Json::object { { "type", "connect" }, { "message", "connection success!" } };
+
+        m_endpoint.send(hdl, connect.dump(), websocketpp::frame::opcode::TEXT);
     }
 
     void on_message(websocketpp::connection_hdl hdl, server::message_ptr msg) {
 
-        auto user_id = hdl.lock().get();
-
-        std::cout << "USER MESSAGE: (" << user_id << ") " << msg->get_payload() << std::endl;
-
+        auto connection_id = hdl.lock().get();
         std::string userMessage = msg->get_payload();
 
-        auto ws_pos = userMessage.find(m_userIdPrefix);
-        if (ws_pos != std::string::npos) {
-           // message to one user
+        std::cout << "USER MESSAGE: (" << connection_id << ") " << userMessage << std::endl;
 
-           while ( ! (userMessage[ws_pos] >= '0' &&  userMessage[ws_pos] <= '9'))
-              ws_pos++;
+        std::string error;
+        auto jsonMsg = Json::parse(userMessage, error);
 
-           uint64_t ws_user_id = std::stoi(userMessage.substr(ws_pos));
-           std::cout << "MESSAGE FOR USER: (" << ws_user_id << ") " << std::endl;
-
-           auto userHandle = m_active_user_handle.find((void*)ws_user_id);
-           if (userHandle == m_active_user_handle.end()) {
-               std::cout << "USER " << ws_user_id << " NOT ACTIVE" << std::endl;
-               return;
-           }
-
-           std::cout << "SEND TO USER : (" << ws_user_id << ") " << userMessage << std::endl;
-           m_endpoint.send(userHandle->second, userMessage, msg->get_opcode());
+        if (! error.empty()) {
+           std::cout << "JSON parsing error: " << error << std::endl;
            return;
         }
 
-        m_active_user_info[user_id] = userMessage;
-
-        auto connectEvent = createMessage(m_connectPrefix, user_id, userMessage);
-
-        // Send new user to all other users
-        for (auto &userHandle: m_active_user_handle) {
-
-             if (userHandle.first != user_id) {
-                 std::cout << "SEND TO USER : (" << user_id << ") " << connectEvent << std::endl;
-
-                 try {
-                     m_endpoint.send(userHandle.second, connectEvent, msg->get_opcode());
-                 }
-                 catch (std::exception &exp) {
-                     std::cout << "SEND FAILED: " << exp.what() << std::endl;
-                 }
-             }
+        auto jsonMap = jsonMsg.object_items();
+        if (jsonMap.find("type") == jsonMap.end()) {
+           std::cout << "\"type\" not found in the message" << std::endl;
+           return;
         }
 
-        // Send all other users to the new user
-        for (auto &userEntry : m_active_user_info) {
-             const std::string &userInfo = userEntry.second;
+        if (jsonMap.find("name") == jsonMap.end()) {
+           std::cout << "\"name\" not found in the message" << std::endl;
+           return;
+        }
 
-             connectEvent = createMessage(m_connectPrefix, userEntry.first, userInfo);
+		Json ws_msg;
+        auto type = jsonMap["type"].string_value();
+        auto name = jsonMap["name"].string_value();
+		if (jsonMap.find("candidate") != jsonMap.end()) {
+			ws_msg = jsonMap["candidate"];
+			std::cout << "CANDIDATE MSG : " << ws_msg.dump() << std::endl;
+		}
+        else if (jsonMap.find("offer") != jsonMap.end()) {
+			ws_msg = jsonMap["offer"];
+			std::cout << "OFFER MSG : " << ws_msg.dump() << std::endl;
+        }
+        else if (jsonMap.find("answer") != jsonMap.end()) {
+			ws_msg = jsonMap["answer"];
+			std::cout << "ANSWER MSG : " << ws_msg.dump() << std::endl;
+        }
 
-             if (userEntry.first != user_id) {
-                 std::cout << "SEND TO USER : (" << userEntry.first << ") " << connectEvent << std::endl;
+        if (type == "login") {
 
-                 try {
-                     m_endpoint.send(hdl, connectEvent, msg->get_opcode());
-                 }
-                 catch (std::exception &exp) {
-                     std::cout << "SEND FAILED: " << exp.what() << std::endl;
-                 }
-             }
+			if (m_connection_by_name.find(name) != m_connection_by_name.end()) {
+               std::cout << "User " << name << " already logged in" << std::endl;
+               Json login_reject = Json::object { { "type", "login" }, { "success", false }, { "reason", "user already logged in" } };
+               m_endpoint.send(hdl, login_reject.dump(), websocketpp::frame::opcode::TEXT);
+               return;
+			}
+
+			Json login_success = Json::object { { "type", "login" }, { "success", true } , { "users", get_user_list() } };
+			m_endpoint.send(hdl, login_success.dump(), websocketpp::frame::opcode::TEXT);
+
+			std::ostringstream user_object_id;
+			user_object_id << connection_id;
+			
+			auto userinfo = Json::object { { "userName", name }, { "id", user_object_id.str() } };
+			m_user_info_by_name[name] = userinfo;
+
+			m_connection_by_name[name] = hdl.lock();
+			m_login_name_by_id[connection_id] = name;
+
+			Json update_for_other_users = Json::object { { "type", "updateUsers" }, { "user", userinfo } };
+			for (auto &connection : m_connection_by_name) {
+				if (connection.first != name)
+				m_endpoint.send(connection.second, update_for_other_users.dump(), websocketpp::frame::opcode::TEXT);
+			}
+
+        }
+        else { // all other types 
+
+			if (m_connection_by_name.find(name) == m_connection_by_name.end()) {
+				std::cout << "User \"" << name << "\" not logged in" << std::endl;
+				std::cout << "Ignoring message for \"" << name << "\"" << std::endl;
+				return;
+			}
+
+			Json webrtc_fwd_msg ;
+			if(type == "candidate"){
+				webrtc_fwd_msg = Json::object { { "type", type },{ "candidate", ws_msg } };
+				m_endpoint.send(m_connection_by_name[name], webrtc_fwd_msg.dump(), msg->get_opcode());
+			}
+			else if(type == "offer"){
+				webrtc_fwd_msg = Json::object { { "name", m_login_name_by_id[connection_id] }, { "offer", ws_msg }, { "type", type } };
+				m_endpoint.send(m_connection_by_name[name], webrtc_fwd_msg.dump(), msg->get_opcode());
+			}
+			else if(type == "answer"){
+				webrtc_fwd_msg = Json::object { { "type", type },{ "answer", ws_msg } };
+				m_endpoint.send(m_connection_by_name[name], webrtc_fwd_msg.dump(), msg->get_opcode());
+			}
+			else{
+				m_endpoint.send(m_connection_by_name[name], userMessage, msg->get_opcode());
+			}
         }
     }
 
     void on_close(websocketpp::connection_hdl hdl) {
-        auto user_id = hdl.lock().get();
+        auto connection_id = hdl.lock().get();
 
-        std::cout << "USER DISCONNECTED: ("  << user_id << ")" << std::endl;
+        std::cout << "USER DISCONNECTED: ("  << connection_id << ")" << std::endl;
 
-        const std::string &userMessage = m_active_user_info[user_id];
-        auto disconnectEvent = createMessage(m_disconnectPrefix, user_id, userMessage);
-
-        // Send user disconnection to all other users
-        for (auto &userHandle: m_active_user_handle) {
-             if (userHandle.first != user_id) {
-                 std::cout << "SEND TO USER : (" << userHandle.first << ") " << disconnectEvent << std::endl;
-
-                 try {
-                     m_endpoint.send(userHandle.second, disconnectEvent, websocketpp::frame::opcode::TEXT);
-                 }
-                 catch (std::exception &exp) {
-                     std::cout << "SEND FAILED: " << exp.what() << std::endl;
-                 }
-             }
+        if (m_login_name_by_id.find(connection_id) == m_login_name_by_id.end()) {
+           std::cout << "USER not logged in: ("  << connection_id << ")" << std::endl;
+           return;
         }
 
-        m_active_user_info.erase(user_id);
-        m_active_user_handle.erase(user_id);
+        auto name = m_login_name_by_id[connection_id];
+        m_connection_by_name.erase(name);
+        m_user_info_by_name.erase(name);
+        m_login_name_by_id.erase(connection_id);
+
+        Json update_for_other_users = Json::object { { "type", "updateUsers" }, { "users", get_user_list() } };
+        for (auto &connection : m_connection_by_name) {
+//           if (connection.first != name)
+//              m_endpoint.send(connection.second, update_for_other_users.dump(), websocketpp::frame::opcode::TEXT);
+        }
+    }
+
+    Json get_user_list() const {
+        std::vector<Json> user_list;
+
+        for (auto &user : m_user_info_by_name) {
+           user_list.push_back(user.second);
+        }
+
+        return Json(user_list);
     }
 
     void start(int32_t port) {
@@ -147,18 +188,8 @@ private:
     // Using connection pointer as the key to user information map
     typedef void* user_connection_type;
 
-    std::map<user_connection_type, std::string> m_active_user_info;
-    std::map<user_connection_type, std::shared_ptr<void>> m_active_user_handle;
+    std::map<std::string, std::shared_ptr<void>> m_connection_by_name;
+    std::map<std::string, Json> m_user_info_by_name;
+    std::map<user_connection_type, std::string> m_login_name_by_id;
 
-    std::string m_userIdPrefix = "\"ws_user_id\":\"";
-    std::string m_connectPrefix = "{ \"event_id\": \"connect\",";
-    std::string m_disconnectPrefix = "{ \"event_id\": \"disconnect\",";
-
-    std::string createMessage(const std::string &event, void* user_id, const std::string &userMessage) {
-         uint64_t ws_user_id = reinterpret_cast<uint64_t>(user_id);
-
-         std::ostringstream msg;
-         msg << event << m_userIdPrefix << ws_user_id << "\"," << userMessage.substr(userMessage.find("{") + 1);
-         return msg.str();
-    }
 };
