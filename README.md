@@ -8,5 +8,5 @@ GitHub : https://github.com/priyanthasanjeewa/WebRTC-Signal-Server-CPP.git
 3.Run start.sh -> ./start.sh  (Signaling server will start to run on port 18099)
 4.Run stop.sh whenever you want to stop the server. -> ./stop.sh 
 
-PS : 1. C++ Signaling server is now configured with WebRTC app and submitted as a seperate application.
+PS : 1. C++ Signaling server is now configured with WebRTC application and submitted as a seperate application.
      2. Video call configuration and handling concurrency are yet to complete.
